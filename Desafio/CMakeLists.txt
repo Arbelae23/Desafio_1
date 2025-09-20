@@ -5,7 +5,8 @@ project(Desafio LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-add_executable(Desafio main.cpp)
+add_executable(Desafio main.cpp
+    Encriptado1.txt Encriptado2.txt Encriptado3.txt Encriptado4.txt pista1.txt pista2.txt pista3.txt pista4.txt)
 
 include(GNUInstallDirs)
 install(TARGETS Desafio
