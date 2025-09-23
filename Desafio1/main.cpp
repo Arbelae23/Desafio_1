@@ -18,13 +18,85 @@ void desencriptar(unsigned char* buffer, int size, int n, unsigned char K) {
     }
 }
 
+
+// ======== DESCOMPRESIÓN RLE ========
+char* decompressRLE(const unsigned char* data, int length, int* outLen) {
+    // Reservar memoria con capacidad máxima (asumimos peor caso)
+    char* result = (char*) malloc(length * 10);
+    int pos = 0;
+
+    for (int i = 0; i < length; i += 2) {
+        unsigned char count = data[i];    // número de repeticiones
+        unsigned char value = data[i+1];  // carácter repetido
+        for (int j = 0; j < count; j++) {
+            result[pos++] = value;
+        }
+    }
+
+    *outLen = pos;
+    return result;
+}
+
+
+// ======== DESCOMPRESIÓN LZ78 (versión simple) ========
+char* decompressLZ78(const unsigned char* data, int length, int* outLen) {
+    // Reservar memoria para salida
+    char* result = (char*) malloc(length * 10);
+    int pos = 0;
+
+    // Diccionario (simplificado con arrays estáticos)
+    char* dict[1024];
+    int dictSize = 0;
+
+    for (int i = 0; i < length; i += 2) {
+        int index = data[i];       // índice del diccionario
+        char nextChar = data[i+1]; // nuevo carácter
+
+        // Recuperar la entrada
+        if (index > 0 && index <= dictSize) {
+            char* entry = dict[index - 1];
+            int len = strlen(entry);
+            memcpy(result + pos, entry, len);
+            pos += len;
+        }
+
+        // Añadir el nuevo carácter
+        result[pos++] = nextChar;
+
+        // Guardar nueva entrada en el diccionario
+        int entryLen = ((index > 0) ? strlen(dict[index-1]) : 0) + 1;
+        char* newEntry = (char*) malloc(entryLen + 1);
+        if (index > 0) strcpy(newEntry, dict[index-1]);
+        else newEntry[0] = '\0';
+        int len = strlen(newEntry);
+        newEntry[len] = nextChar;
+        newEntry[len+1] = '\0';
+
+        dict[dictSize++] = newEntry;
+    }
+
+    *outLen = pos;
+    return result;
+}
+
+// ======== VERIFICAR PISTA ========
+bool containsFragment(const char* text, int len, const char* fragment) {
+    int fragLen = strlen(fragment);
+    for (int i = 0; i <= len - fragLen; i++) {
+        if (memcmp(text + i, fragment, fragLen) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 int main() {
     // Mostrar en pantalla la carpeta donde se está ejecutando el programa (para verificar si el archivo se estaba leyendo)
     cout << "Ruta actual de ejecucion: "
          << filesystem::current_path() << endl;
 
     // Abrimos el archivo encriptado en modo binario
-    ifstream archivo("C:/Users/USER/Documents/GitHub/Desafio_1/Desafio1/Encriptado1.txt", ios::binary | ios::ate);
+    ifstream archivo("C:/Users/SYSTICOM SOPORTE/Documents/GitHub/Desafio_1/Desafio1/Encriptado1.txt", ios::binary | ios::ate);
     if (!archivo) {  // Si no se puede abrir el archivo
         cout << "No se pudo abrir el archivo." << endl;
         return 1;    // Salimos del programa
