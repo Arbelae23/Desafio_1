@@ -1,144 +1,225 @@
 #include <iostream>
-#include <fstream>      // Libreria para abrir y leer archivos
-#include <filesystem>   // Libreria para obtener la ruta de ejecucion
+#include <fstream>
 using namespace std;
 
-// Función que rota los bits de un byte a la derecha n posiciones
-unsigned char rotarDerecha(unsigned char byte, int n) {
-    return (byte >> n) | (byte << (8 - n));  // Se hace corrimiento y se juntan los bits
-}
+// === FUNCIONES DE UTILIDAD ===
 
-// Función que aplica la desencriptacion a todo el buffer
-void desencriptar(unsigned char* buffer, int size, int n, unsigned char K) {
-    for (int i = 0; i < size; i++) {
-        unsigned char c = buffer[i];   // Tomamos el byte actual
-        c = c ^ K;                     // Primero le aplicamos un XOR con la clave
-        c = rotarDerecha(c, n);        // Luego rotamos sus bits n posiciones a la derecha
-        buffer[i] = c;                 // Guardamos el resultado en el mismo lugar
+// Leer archivo en memoria dinámica
+unsigned char* leerArchivo(const char* filename, int &size) {
+    ifstream file(filename, ios::binary | ios::ate);
+    if (!file.is_open()) {
+        cerr << "Error abriendo archivo: " << filename << endl;
+        size = 0;
+        return nullptr;
     }
+    size = file.tellg();
+    file.seekg(0, ios::beg);
+
+    unsigned char* buffer = new unsigned char[size];
+    file.read((char*)buffer, size);
+    file.close();
+    return buffer;
 }
 
+// Rotación a la izquierda
+unsigned char rotarIzquierda(unsigned char b, int n) {
+    return (b << n) | (b >> (8 - n));
+}
 
-// ======== DESCOMPRESIÓN RLE ========
-char* decompressRLE(const unsigned char* data, int length, int* outLen) {
-    // Reservar memoria con capacidad máxima (asumimos peor caso)
-    char* result = (char*) malloc(length * 10);
+// Rotación a la derecha (inversa)
+unsigned char rotarDerecha(unsigned char b, int n) {
+    return (b >> n) | (b << (8 - n));
+}
+
+// Desencriptar (rotación derecha + XOR)
+unsigned char* desencriptar(unsigned char* data, int len, int n, unsigned char k) {
+    unsigned char* out = new unsigned char[len];
+    for (int i = 0; i < len; i++) {
+        unsigned char temp = data[i] ^ k;
+        out[i] = rotarDerecha(temp, n);
+    }
+    return out;
+}
+
+// === DESCOMPRESIÓN RLE ===
+char* decompressRLE(unsigned char* data, int length, int* outLen) {
+    if (length % 2 != 0) return nullptr; // debe ser par
+
+    int capacity = length * 4;
+    char* out = new char[capacity];
     int pos = 0;
 
-    for (int i = 0; i < length; i += 2) {
-        unsigned char count = data[i];    // número de repeticiones
-        unsigned char value = data[i+1];  // carácter repetido
+    for (int i = 0; i + 1 < length; i += 2) {
+        unsigned char count = data[i];
+        unsigned char value = data[i + 1];
         for (int j = 0; j < count; j++) {
-            result[pos++] = value;
+            if (pos >= capacity) { // redimensionar
+                capacity *= 2;
+                char* tmp = new char[capacity];
+                for (int k = 0; k < pos; k++) tmp[k] = out[k];
+                delete[] out;
+                out = tmp;
+            }
+            out[pos++] = (char)value;
         }
     }
-
     *outLen = pos;
-    return result;
+    return out;
 }
 
+// === DESCOMPRESIÓN LZ78 (simplificada) ===
+char* decompressLZ78(unsigned char* data, int length, int* outLen) {
+    const int dictCap = 256;
+    int dictSize = 0;
+    char** dict = new char*[dictCap];
 
-// ======== DESCOMPRESIÓN LZ78 (versión simple) ========
-char* decompressLZ78(const unsigned char* data, int length, int* outLen) {
-    // Reservar memoria para salida
-    char* result = (char*) malloc(length * 10);
+    int cap = length * 8;
+    char* output = new char[cap];
     int pos = 0;
 
-    // Diccionario (simplificado con arrays estáticos)
-    char* dict[1024];
-    int dictSize = 0;
+    int i = 0;
+    while (i + 1 < length) {
+        unsigned char idx = data[i];
+        unsigned char sym = data[i+1];
+        i += 2;
 
-    for (int i = 0; i < length; i += 2) {
-        int index = data[i];       // índice del diccionario
-        char nextChar = data[i+1]; // nuevo carácter
+        int entryLen = 0;
+        char* entry = nullptr;
 
-        // Recuperar la entrada
-        if (index > 0 && index <= dictSize) {
-            char* entry = dict[index - 1];
-            int len = strlen(entry);
-            memcpy(result + pos, entry, len);
-            pos += len;
+        if (idx == 0) {
+            entryLen = 1;
+            entry = new char[1];
+            entry[0] = (char)sym;
+        } else if (idx <= dictSize) {
+            // calculamos longitud previa manualmente
+            int prevLen = 0;
+            while (dict[idx-1][prevLen] != '\0') prevLen++;
+            entryLen = prevLen + 1;
+            entry = new char[entryLen];
+            for (int k = 0; k < prevLen; k++) entry[k] = dict[idx-1][k];
+            entry[prevLen] = (char)sym;
         }
 
-        // Añadir el nuevo carácter
-        result[pos++] = nextChar;
-
-        // Guardar nueva entrada en el diccionario
-        int entryLen = ((index > 0) ? strlen(dict[index-1]) : 0) + 1;
-        char* newEntry = (char*) malloc(entryLen + 1);
-        if (index > 0) strcpy(newEntry, dict[index-1]);
-        else newEntry[0] = '\0';
-        int len = strlen(newEntry);
-        newEntry[len] = nextChar;
-        newEntry[len+1] = '\0';
-
-        dict[dictSize++] = newEntry;
+        if (entry) {
+            for (int k = 0; k < entryLen; k++) {
+                if (pos >= cap) {
+                    cap *= 2;
+                    char* tmp = new char[cap];
+                    for (int t = 0; t < pos; t++) tmp[t] = output[t];
+                    delete[] output;
+                    output = tmp;
+                }
+                output[pos++] = entry[k];
+            }
+            if (dictSize < dictCap) {
+                dict[dictSize++] = entry;
+            } else {
+                delete[] entry;
+            }
+        }
     }
 
     *outLen = pos;
-    return result;
+    for (int d = 0; d < dictSize; d++) delete[] dict[d];
+    delete[] dict;
+    return output;
 }
 
-// ======== VERIFICAR PISTA ========
-bool containsFragment(const char* text, int len, const char* fragment) {
-    int fragLen = strlen(fragment);
-    for (int i = 0; i <= len - fragLen; i++) {
-        if (memcmp(text + i, fragment, fragLen) == 0) {
-            return true;
+// === Buscar pista en texto ===
+bool contienePista(const char* texto, int lenTexto, const char* pista, int lenPista) {
+    for (int i = 0; i <= lenTexto - lenPista; i++) {
+        bool ok = true;
+        for (int j = 0; j < lenPista; j++) {
+            if (texto[i+j] != pista[j]) { ok = false; break; }
         }
+        if (ok) return true;
     }
     return false;
 }
 
+// === MAIN ===
 int main() {
-    // Mostrar en pantalla la carpeta donde se está ejecutando el programa (para verificar si el archivo se estaba leyendo)
-    cout << "Ruta actual de ejecucion: "
-         << filesystem::current_path() << endl;
+    // Leer mensaje y pista
+    int msgLen = 0;
+    unsigned char* mensaje = leerArchivo("C:/Users/SYSTICOM SOPORTE/Documents/GitHub/Desafio_1/Desafio1/Encriptado1.txt", msgLen);
+    if (!mensaje) return 1;
 
-    // Abrimos el archivo encriptado en modo binario
-    ifstream archivo("C:/Users/SYSTICOM SOPORTE/Documents/GitHub/Desafio_1/Desafio1/Encriptado1.txt", ios::binary | ios::ate);
-    if (!archivo) {  // Si no se puede abrir el archivo
-        cout << "No se pudo abrir el archivo." << endl;
-        return 1;    // Salimos del programa
-    }
+    int pistaLen = 0;
+    unsigned char* pistaBuf = leerArchivo("C:/Users/SYSTICOM SOPORTE/Documents/GitHub/Desafio_1/Desafio1/pista1.txt", pistaLen);
+    if (!pistaBuf) { delete[] mensaje; return 1; }
+    char* pista = new char[pistaLen+1];
+    for (int i = 0; i < pistaLen; i++) pista[i] = pistaBuf[i];
+    pista[pistaLen] = '\0';
+    delete[] pistaBuf;
 
-    // Obtenemos el tamaño total del archivo en bytes
-    streamsize size = archivo.tellg();
-    archivo.seekg(0, ios::beg);  // Volvemos al inicio del archivo
+    // Probar todas las combinaciones n (1..7) y k (0..255)
+    for (int n = 1; n <= 7; n++) {
+        for (int k = 0; k < 256; k++) {
+            // Desencriptar
+            unsigned char* desencriptado = desencriptar(mensaje, msgLen, n, (unsigned char)k);
 
-    // Reservamos memoria dinamica para guardar el archivo completo
-    unsigned char* original = new unsigned char[size];
-    archivo.read(reinterpret_cast<char*>(original), size);  // Leemos todo en memoria
-    archivo.close();  // Cerramos el archivo porque ya no lo necesitamos
-
-    cout << "Archivo leido, tamaño: " << size << " bytes\n";
-
-    // Probamos todas las combinaciones posibles:
-    // n = cantidad de bits de rotacion (1 a 7)
-    // K = clave XOR (0 a 255)
-    for (int n = 1; n < 8; n++) {
-        for (int K = 0; K < 256; K++) {
-            // Creamos una copia del buffer original (para no dañarlo)
-            unsigned char* copia = new unsigned char[size];
-            for (int i = 0; i < size; i++) copia[i] = original[i];
-
-            // Aplicamos la desencriptacion con la combinacion actual (n,K)
-            desencriptar(copia, size, n, (unsigned char)K);
-
-            // Imprimimos en consola los primeros 50 caracteres resultantes
-            cout << "n=" << n << ", K=" << K << " => ";
-            for (int i = 0; i < 50 && i < size; i++) {
-                unsigned char c = copia[i];
-                if (c >= 32 && c <= 126) cout << c; // Si es un carácter visible lo mostramos
-                else cout << "_";                   // Si no, ponemos un barra al piso
+            // RLE
+            int outLen = 0;
+            char* rle = decompressRLE(desencriptado, msgLen, &outLen);
+            if (rle && contienePista(rle, outLen, pista, pistaLen)) {
+                cout << "Encontrado con RLE, n=" << n << " k=" << k << endl;
+                cout << "Mensaje: ";
+                for (int i = 0; i < outLen; i++) cout << rle[i];
+                cout << endl;
+                delete[] rle;
+                delete[] desencriptado;
+                goto fin; // terminamos
             }
-            cout << endl;  // Fin de la linea
 
-            delete[] copia;  // Liberamos la memoria de la copia
+            /*
+
+            if (rle) {
+                cout << "DEBUG (primeros 200 chars RLE): ";
+                for (int i = 0; i < min(outLen, 200); i++) cout << rle[i];
+                cout << endl;
+            }
+            */
+
+            delete[] rle;
+
+            // LZ78
+            outLen = 0;
+            char* lz = decompressLZ78(desencriptado, msgLen, &outLen);
+            if (lz && contienePista(lz, outLen, pista, pistaLen)) {
+                cout << "Encontrado con LZ78, n=" << n << " k=" << k << endl;
+                cout << "Mensaje: ";
+                for (int i = 0; i < outLen; i++) cout << lz[i];
+                cout << endl;
+                delete[] lz;
+                delete[] desencriptado;
+                goto fin;
+            }
+
+            /*
+
+            if (lz) {
+                cout << "DEBUG (primeros 200 chars LZ78): ";
+                for (int i = 0; i < min(outLen, 200); i++) cout << lz[i];
+                cout << endl;
+            }
+            */
+
+            delete[] lz;
+
+            delete[] desencriptado;
         }
     }
 
-    // Al final liberamos la memoria del buffer original
-    delete[] original;
+    cout << "No se encontró coincidencia con la pista." << endl;
+
+fin:
+    delete[] mensaje;
+    delete[] pista;
     return 0;
 }
+
+
+
+
+
+
